@@ -1,0 +1,73 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test with Java ${{ matrix.jdk }} [${{ matrix.expander_leg }}]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - jdk: 21
+          os: macos-latest
+          arch: arm64
+          runner: macos-latest
+          expander_leg: macos-latest-21-arm64
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+      # Temurin publishes no JDK 17 build for Windows on ARM64, so setup-java cannot resolve '17'
+      # there. The Microsoft Build of OpenJDK ships Windows aarch64 builds for both 17 and 21.
+    - uses: actions/setup-java@v4
+      with:
+        distribution: ${{ (matrix.os == 'windows-latest' && matrix.arch == 
+          'arm64') && 'microsoft' || 'temurin' }}
+        java-version: ${{ matrix.jdk }}
+        cache: 'gradle'
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@af1da67850ed9a4cedd57bfd976089dd991e2582   # v4.0.0
+    - name: Build with Gradle Wrapper
+      run: ./gradlew check -x test --console=plain --warning-mode all
+      # The default variant of this action is a Docker container action, which runs on Linux only.
+      # macOS and Windows runners need the action's platform-specific composite variants.
+    - name: Publish Test Results (Linux)
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always() && runner.os == 'Linux'
+      with:
+        files: |-
+          build/test-results/**/*.xml
+          build/test-results/**/*.trx
+          build/test-results/**/*.json
+    - name: Publish Test Results (macOS)
+      uses: EnricoMi/publish-unit-test-result-action/macos@v2
+      if: always() && runner.os == 'macOS'
+      with:
+        files: |-
+          build/test-results/**/*.xml
+          build/test-results/**/*.trx
+          build/test-results/**/*.json
+      # On Windows ARM64, the action's pip install has no prebuilt cryptography wheel to use, so it
+      # tries to build one from source and fails because OpenSSL is missing. An x64 Python, which
+      # runs under the runner's x64 emulation, installs the prebuilt x64 wheels.
+    - name: Set up x64 Python for publishing test results (Windows ARM64)
+      uses: actions/setup-python@v5
+      if: always() && runner.os == 'Windows' && runner.arch == 'ARM64'
+      with:
+        python-version: '3.12'
+        architecture: x64
+    - name: Publish Test Results (Windows)
+      uses: EnricoMi/publish-unit-test-result-action/windows@v2
+      if: always() && runner.os == 'Windows'
+      with:
+        files: |-
+          build/test-results/**/*.xml
+          build/test-results/**/*.trx
+          build/test-results/**/*.json
+    timeout-minutes: 150
