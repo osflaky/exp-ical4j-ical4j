@@ -1,0 +1,153 @@
+/**
+ * Copyright (c) 2012, Ben Fortuna
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *  o Redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer.
+ *
+ *  o Redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution.
+ *
+ *  o Neither the name of Ben Fortuna nor the names of any other contributors
+ * may be used to endorse or promote products derived from this software
+ * without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package net.fortuna.ical4j.data;
+
+import net.fortuna.ical4j.model.Calendar;
+import net.fortuna.ical4j.util.CompatibilityHints;
+import net.fortuna.ical4j.validate.ValidationException;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
+/**
+ * $Id: CalendarOutputterTest.java [Apr 6, 2004]
+ * <p/>
+ * Test case for iCalendarOutputter.
+ *
+ * @author benf
+ */
+public class CalendarOutputterTest {
+
+    private static final Logger log = LoggerFactory.getLogger(CalendarOutputterTest.class);
+
+    /* (non-Javadoc)
+     * @see junit.framework.TestCase#setUp()
+     */
+    @BeforeEach
+    public final void setUp() throws Exception {
+        CompatibilityHints.setHintEnabled(CompatibilityHints.KEY_RELAXED_UNFOLDING, true);
+    }
+
+    /* (non-Javadoc)
+     * @see junit.framework.TestCase#tearDown()
+     */
+    @AfterEach
+    public final void tearDown() throws Exception {
+        CompatibilityHints.clearHintEnabled(CompatibilityHints.KEY_RELAXED_UNFOLDING);
+    }
+
+    /**
+     * @throws Exception
+     */
+    @ParameterizedTest
+    @MethodSource
+    @Disabled
+    public void testOutput(final String filename) throws Exception {
+        try {
+            CalendarBuilder builder = new CalendarBuilder();
+            FileInputStream fin = new FileInputStream(filename);
+            CalendarOutputter outputter = new CalendarOutputter(false, FoldingWriter.REDUCED_FOLD_LENGTH);
+            OutputStream out = new ByteArrayOutputStream();
+
+            Calendar calendar = null;
+            try {
+                calendar = builder.build(fin);
+            } catch (IOException e) {
+                log.error("Error while parsing: " + filename, e);
+            } catch (ParserException e) {
+                log.error("Error while parsing: " + filename, e);
+            }
+
+            assertNotNull(calendar);
+
+            outputter.setValidating(false);
+            outputter.output(calendar, out);
+
+            if (log.isDebugEnabled()) {
+                log.debug(out.toString());
+            }
+
+            BufferedReader bin = new BufferedReader(new UnfoldingReader(new FileReader(filename), 1024), 1024);
+            StringWriter rout = new StringWriter();
+            BufferedWriter bout = new BufferedWriter(rout);
+
+            try {
+                String line = null;
+                while ((line = bin.readLine()) != null) {
+                    bout.write(line);
+                    bout.write('\n');
+                }
+            } finally {
+                bout.close();
+                bin.close();
+            }
+
+            String rawData = rout.toString();
+
+            assertEquals(rawData, out.toString(), "Output differed from expected: " + filename);
+        } catch (IOException e) {
+            log.error("Error while parsing: " + filename, e);
+            throw e;
+        } catch (ValidationException e) {
+            log.error("Error while parsing: " + filename, e);
+            throw e;
+        }
+    }
+
+    private static List<String> testOutput() {
+        List<String> input = new ArrayList<>();
+
+        // valid tests..
+        input.addAll(Arrays.stream(Objects.requireNonNull(new File("src/test/resources/samples/valid")
+                        .listFiles(f -> !f.isDirectory() && f.getName().endsWith(".ics"))))
+                .map(File::getPath).collect(Collectors.toList()));
+        // invalid tests..
+        input.addAll(Arrays.stream(Objects.requireNonNull(new File("src/test/resources/samples/invalid")
+                        .listFiles(f -> !f.isDirectory() && f.getName().endsWith(".ics"))))
+                .map(File::getPath).collect(Collectors.toList()));
+        return input;
+    }
+}

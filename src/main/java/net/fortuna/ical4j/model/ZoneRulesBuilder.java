@@ -1,0 +1,266 @@
+package net.fortuna.ical4j.model;
+
+import net.fortuna.ical4j.model.component.Observance;
+import net.fortuna.ical4j.model.component.Standard;
+import net.fortuna.ical4j.model.component.VTimeZone;
+import net.fortuna.ical4j.model.property.DtStart;
+import net.fortuna.ical4j.model.property.RDate;
+import net.fortuna.ical4j.model.property.RRule;
+import net.fortuna.ical4j.model.property.TzOffsetFrom;
+import net.fortuna.ical4j.model.property.TzOffsetTo;
+import net.fortuna.ical4j.util.CompatibilityHints;
+
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.Temporal;
+import java.time.zone.ZoneOffsetTransition;
+import java.time.zone.ZoneOffsetTransitionRule;
+import java.time.zone.ZoneOffsetTransitionRule.TimeDefinition;
+import java.time.zone.ZoneRules;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import static net.fortuna.ical4j.model.Property.TZOFFSETFROM;
+
+/**
+ * Construct a {@link java.time.zone.ZoneRules} instance from a {@link net.fortuna.ical4j.model.component.VTimeZone}.
+ */
+public class ZoneRulesBuilder {
+
+    private VTimeZone vTimeZone;
+
+    public ZoneRulesBuilder vTimeZone(VTimeZone vTimeZone) {
+        this.vTimeZone = vTimeZone;
+        return this;
+    }
+
+    /**
+     * Build a list of historical transitions for the recognised standard offset. For example, where the standard UTC
+     * offset changes from -7 to -8 permanently.
+     * @param observances
+     * @return
+     */
+    private List<ZoneOffsetTransition> buildStandardOffsetTransitions(List<Standard> observances) {
+        List<ZoneOffsetTransition> transitions = new ArrayList<>();
+
+        // sort and iterate comparing the standard offset for each observance
+        ZoneOffset prevOffset = null;
+
+        // reverse iterate observances to calculate historical occurrences
+        List<Standard> sorted = new ArrayList<>(observances);
+        sorted.sort((o1, o2) -> {
+            DtStart<LocalDateTime> o1Start = o1.getRequiredProperty("DTSTART");
+            DtStart<LocalDateTime> o2Start = o2.getRequiredProperty("DTSTART");
+            return TemporalComparator.INSTANCE.compare(o1Start.getDate(), o2Start.getDate());
+        });
+
+        for (var observance : sorted) {
+            // ignore transitions that have no effect..
+            Optional<TzOffsetFrom> offsetFrom = observance.getProperty(TZOFFSETFROM);
+            TzOffsetTo offsetTo = observance.getRequiredProperty(Property.TZOFFSETTO);
+            DtStart<LocalDateTime> start = observance.getRequiredProperty("DTSTART");
+
+            if (prevOffset != null && offsetFrom.isPresent()) {
+                if (!offsetTo.getOffset().equals(prevOffset)) {
+                    transitions.add(ZoneOffsetTransition.of(start.getDate(), prevOffset, offsetTo.getOffset()));
+                }
+            }
+            prevOffset = offsetTo.getOffset();
+        }
+
+        return transitions;
+    }
+
+    /**
+     * Build a list of transitions for historical DST changes. These are typically temporary offset changes
+     * every six months.
+     * @param observances
+     * @return
+     */
+    private List<ZoneOffsetTransition> buildDSTTransitions(List<Observance> observances) {
+        List<ZoneOffsetTransition> transitions = new ArrayList<>();
+
+        for (Observance observance : observances) {
+            Optional<TzOffsetFrom> offsetFrom = observance.getProperty(TZOFFSETFROM);
+            TzOffsetTo offsetTo = observance.getRequiredProperty(Property.TZOFFSETTO);
+
+            // ignore transitions that have no effect..
+            if (offsetFrom.isPresent() && !offsetFrom.get().getOffset().equals(offsetTo.getOffset())) {
+                final DtStart<Temporal> start = observance.getRequiredProperty("DTSTART");
+                LocalDateTime startDate;
+                if (!(start.getDate() instanceof LocalDateTime)) {
+                    if (CompatibilityHints.isHintEnabled(CompatibilityHints.KEY_RELAXED_PARSING)) {
+                        startDate = LocalDateTime.from(start.getDate());
+                    } else {
+                        throw new RuntimeException("VTIMEZONE start date must be specified in local time");
+                    }
+                } else {
+                    startDate = (LocalDateTime) start.getDate();
+                }
+                LocalDateTime periodEnd = LocalDateTime.now();
+                if (periodEnd.isBefore(startDate)) {
+                    periodEnd = startDate.plusYears(5);
+                }
+                final LocalDateTime rangeEnd = periodEnd;
+
+                // Generate onset instances with offset-aware recurrence seeding. The generic
+                // Component.calculateRecurrenceSet anchors recurrence on the floating DTSTART, so when
+                // an RRULE UNTIL is expressed in UTC (as required for VTIMEZONE) the comparison resolves
+                // the floating candidate via TimeZones.getDefault() - making the derived ZoneRules depend
+                // on the JVM default zone (e.g. Asia/Tokyo's expired 1948-1951 DST yields +10:00 east of
+                // UTC). Seeding getDates with an OffsetDateTime at TZOFFSETFROM makes the UNTIL comparison
+                // deterministic, mirroring Observance.getLatestOnset.
+                final ZoneOffset offset = offsetFrom.get().getOffset();
+                final SortedSet<LocalDateTime> onsets = new TreeSet<>();
+                // the initial instance is always a transition onset (also covers non-recurring
+                // observances, whose single DTSTART transition must not be dropped - issue #793).
+                onsets.add(startDate);
+
+                final OffsetDateTime seed = startDate.atOffset(offset);
+                final OffsetDateTime limit = periodEnd.atOffset(offset);
+                final List<RRule<OffsetDateTime>> rrules = observance.getProperties(Property.RRULE);
+                for (RRule<OffsetDateTime> rrule : rrules) {
+                    rrule.getRecur().getDates(seed, seed, limit)
+                            .forEach(d -> onsets.add(d.toLocalDateTime()));
+                }
+                final List<RDate<LocalDateTime>> rdates = observance.getProperties(Property.RDATE);
+                for (RDate<LocalDateTime> rdate : rdates) {
+                    // RDATE may carry either date-time values or periods (VALUE=PERIOD); the period
+                    // start is the transition onset in the latter case.
+                    final Stream<LocalDateTime> rdateOnsets = rdate.getPeriods().isPresent()
+                            ? rdate.getPeriods().get().stream().map(p -> LocalDateTime.from(p.getStart()))
+                            : rdate.getDates().stream();
+                    rdateOnsets.filter(d -> !d.isBefore(startDate) && !d.isAfter(rangeEnd))
+                            .forEach(onsets::add);
+                }
+
+                onsets.forEach(d -> transitions.add(ZoneOffsetTransition.of(d, offset, offsetTo.getOffset())));
+            }
+        }
+        return transitions;
+    }
+
+    /**
+     * Build rules for future DST transitions.
+     *
+     * @param observances
+     * @param standardOffset
+     * @return
+     * @throws ConstraintViolationException
+     */
+    private List<ZoneOffsetTransitionRule> buildTransitionRules(List<Observance> observances, ZoneOffset standardOffset) throws ConstraintViolationException {
+        List<ZoneOffsetTransitionRule> transitionRules = new ArrayList<>();
+
+        // If every applicable observance carries an RRULE whose UNTIL is already in the past, the
+        // zone has truly abolished recurring DST (e.g. Asia/Tokyo 1948-1951, Asia/Shanghai
+        // 1986-1991). Skip building any future transition rules so we don't resurrect historical
+        // DST as a forever-yearly rule. Zones whose pristine VTIMEZONE only has an RRULE on one
+        // of STANDARD/DAYLIGHT (e.g. Australia/Darwin, America/Sao_Paulo) fall through unchanged,
+        // since the pristine code relies on the single-sided phantom rule to compensate for a
+        // separate UNTIL-comparison limitation in buildDSTTransitions.
+        Instant now = Instant.now();
+        boolean allExpired = !observances.isEmpty() && observances.stream().allMatch(obs -> {
+            Optional<RRule<?>> r = obs.getProperty(Property.RRULE);
+            if (r.isEmpty() || r.get().getRecur().getMonthList().isEmpty()) {
+                return false;
+            }
+            Temporal until = r.get().getRecur().getUntil();
+            return until != null && TemporalComparator.INSTANCE.compare(now, until) > 0;
+        });
+        if (allExpired) {
+            return transitionRules;
+        }
+
+        for (Observance observance : observances) {
+            Optional<RRule<?>> rrule = observance.getProperty(Property.RRULE);
+            TzOffsetFrom offsetFrom = observance.getRequiredProperty(Property.TZOFFSETFROM);
+            TzOffsetTo offsetTo = observance.getRequiredProperty(Property.TZOFFSETTO);
+            DtStart<LocalDateTime> startDate = observance.getRequiredProperty(Property.DTSTART);
+
+            // ignore invalid rules and no-effect transitions (mirrors buildDSTTransitions)
+            if (rrule.isPresent() && !rrule.get().getRecur().getMonthList().isEmpty()
+                    && !offsetFrom.getOffset().equals(offsetTo.getOffset())) {
+                var recur = rrule.get().getRecur();
+                var recurMonth = java.time.Month.of(recur.getMonthList().get(0).getMonthOfYear());
+
+                // derive the transition day. A BYDAY part may carry an ordinal offset (e.g. -1SU) or
+                // a plain weekday (offset 0, in which case BYMONTHDAY pins the day). When neither BYDAY
+                // nor BYMONTHDAY is present (e.g. FREQ=YEARLY;BYMONTH=1), fall back to the DTSTART day
+                // as a fixed-date transition (null day-of-week).
+                int dayOfMonth;
+                java.time.DayOfWeek dayOfWeek;
+                if (!recur.getDayList().isEmpty()) {
+                    dayOfMonth = recur.getDayList().get(0).getOffset();
+                    if (dayOfMonth == 0) {
+                        dayOfMonth = recur.getMonthDayList().isEmpty()
+                                ? startDate.getDate().getDayOfMonth() : recur.getMonthDayList().get(0);
+                    }
+                    dayOfWeek = WeekDay.getDayOfWeek(recur.getDayList().get(0));
+                } else if (!recur.getMonthDayList().isEmpty()) {
+                    dayOfMonth = recur.getMonthDayList().get(0);
+                    dayOfWeek = null;
+                } else {
+                    dayOfMonth = startDate.getDate().getDayOfMonth();
+                    dayOfWeek = null;
+                }
+
+                var time = LocalTime.from(startDate.getDate());
+                boolean endOfDay = false;
+                var timeDefinition = TimeDefinition.WALL;
+                transitionRules.add(ZoneOffsetTransitionRule.of(recurMonth, dayOfMonth, dayOfWeek, time, endOfDay,
+                        timeDefinition, standardOffset, offsetFrom.getOffset(), offsetTo.getOffset()));
+            }
+        }
+        //  Note the order of the list is significant!
+        transitionRules.sort(Comparator.comparing(ZoneOffsetTransitionRule::getMonth));
+        return transitionRules;
+    }
+
+    public ZoneRules build() throws ConstraintViolationException {
+        var now = Instant.now();
+        var currentStandard = VTimeZone.getApplicableObservance(now,
+                vTimeZone.getComponents(Observance.STANDARD));
+
+        var currentDaylight = VTimeZone.getApplicableObservance(now,
+                vTimeZone.getComponents(Observance.DAYLIGHT));
+
+        // if no standard time use daylight time..
+        if (currentStandard == null) {
+            currentStandard = currentDaylight;
+        }
+
+        TzOffsetFrom offsetFrom = currentStandard.getRequiredProperty(Property.TZOFFSETFROM);
+        TzOffsetTo offsetTo = currentStandard.getRequiredProperty(Property.TZOFFSETTO);
+
+        var standardOffset = offsetTo.getOffset();
+        var wallOffset = offsetTo.getOffset();
+
+        List<Standard> stdObservances = vTimeZone.getComponents(Observance.STANDARD);
+        List<ZoneOffsetTransition> standardOffsetTransitions = buildStandardOffsetTransitions(stdObservances);
+        Collections.sort(standardOffsetTransitions);
+
+        List<ZoneOffsetTransition> offsetTransitions = buildDSTTransitions(vTimeZone.getObservances());
+        Collections.sort(offsetTransitions);
+
+        // only create transition rules from the latest definitions..
+        // NOTE: order of transition rules is significant.. if currently in DST next transition should be
+        // to standard time..
+        List<Observance> latestObservances = new ArrayList<>();
+        if (vTimeZone.getApplicableObservance(now).equals(currentDaylight)) {
+            latestObservances.add(currentStandard);
+            latestObservances.add(currentDaylight);
+        } else {
+            latestObservances.add(currentDaylight);
+            latestObservances.add(currentStandard);
+        }
+        latestObservances = latestObservances.stream().filter(Objects::nonNull).collect(Collectors.toList());
+
+        List<ZoneOffsetTransitionRule> transitionRules = buildTransitionRules(latestObservances, standardOffset);
+
+        return ZoneRules.of(standardOffset, wallOffset, standardOffsetTransitions, offsetTransitions, transitionRules);
+    }
+}

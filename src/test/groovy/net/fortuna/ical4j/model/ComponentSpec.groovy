@@ -1,0 +1,128 @@
+package net.fortuna.ical4j.model
+
+import net.fortuna.ical4j.model.component.VEvent
+import net.fortuna.ical4j.model.parameter.Value
+import spock.lang.Shared
+import spock.lang.Specification
+
+import java.time.Duration
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.temporal.Temporal
+
+class ComponentSpec extends Specification {
+
+    @Shared
+    ContentBuilder builder = []
+    
+    def "test Component.calculateRecurrenceSet"() {
+        given: 'a component'
+        VEvent component = builder.with {
+            vevent {
+                dtstart '20140630T000000', parameters: parameters { tzid_ 'Australia/Melbourne' }
+                dtend '20140630T010000', parameters: parameters { tzid_ 'Australia/Melbourne' }
+                rrule 'FREQ=MONTHLY'
+            }
+        }
+        and: 'an expected list of periods (zoned to the DTSTART timezone)'
+        ZoneId melbourne = ZoneId.of('Australia/Melbourne')
+        def fmt = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss")
+        def expectedPeriods = expectedResults.collect {
+            def (s, d) = it.split('/')
+            new Period<ZonedDateTime>(LocalDateTime.parse(s, fmt).atZone(melbourne), Duration.parse(d))
+        } as Set
+
+        expect: 'calculate recurrence set returns the expected results'
+        component.calculateRecurrenceSet(period) == expectedPeriods
+
+        where:
+        period    | expectedResults
+        Period.parse('20140629T000000Z/20150630T000000Z') | ['20140630T000000/PT1H','20140730T000000/PT1H',
+                                                                   '20140830T000000/PT1H',
+                                                                   '20140930T000000/PT1H',
+                                                                   '20141030T000000/PT1H',
+                                                                   '20141130T000000/PT1H',
+                                                                   '20141230T000000/PT1H',
+                                                                   '20150130T000000/PT1H',
+                                                                   '20150330T000000/PT1H',
+                                                                   '20150430T000000/PT1H',
+                                                                   '20150530T000000/PT1H', '20150630T000000/PT1H']
+    }
+
+    def "test Component.calculateRecurrenceSet2"() {
+        given: 'a component'
+        VEvent component = builder.with {
+            vevent {
+                dtstart '20240101T140000', parameters: parameters { tzid_ 'Australia/Sydney' }
+                dtend '20240101T200000', parameters: parameters { tzid_ 'Australia/Sydney' }
+                rrule 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU'
+            }
+        }
+        and: 'a period argument'
+        ZoneId timezone = ZoneId.of("Australia/Sydney")
+        ZonedDateTime from = ZonedDateTime.of(2024, 11, 1, 0, 0, 0, 0, timezone)
+        ZonedDateTime to = ZonedDateTime.of(2024, 11, 2, 0, 0, 0, 0, timezone)
+        Period<ZonedDateTime> period = new Period<ZonedDateTime>(from, to)
+
+        and: 'an expected list of periods (zoned to the DTSTART timezone)'
+        def expectedPeriods = [new Period<ZonedDateTime>(
+                ZonedDateTime.of(2024, 11, 1, 14, 0, 0, 0, timezone), Duration.ofHours(6))] as Set
+
+        expect: 'calculate recurrence set returns the expected results'
+        component.calculateRecurrenceSet(period) == expectedPeriods
+    }
+
+    def "test Component.calculateRecurrenceSet with RDATE"() {
+        given: 'a component'
+        VEvent component = builder.with {
+            vevent {
+                dtstart '20221014T194500'
+                dtend '20221014T194501'
+                rdate '20221014T194500,20221028T194500,20221111T194500,20221125T194500,20221209T194500,20230113T194500'
+            }
+        }
+        and: 'an expected list of periods'
+        def expectedPeriods = new HashSet<Period<? extends Temporal>>()
+        expectedPeriods.addAll(expectedResults.collect { Period.parse(it)})
+
+        expect: 'calculate recurrence set returns the expected results'
+        component.calculateRecurrenceSet(period) == expectedPeriods
+
+        where:
+        period    | expectedResults
+        Period.parse('20221014T194500/20230113T194500') | ['20221014T194500/PT1S', '20221028T194500/PT1S', '20221111T194500/PT1S', '20221125T194500/PT1S', '20221209T194500/PT1S', '20230113T194500/PT1S']
+    }
+
+    def 'test functional property modifier'() {
+        given: 'a component'
+        VEvent event = [false]
+
+        when: 'a null property is applied via functional method'
+        event.with((c, p) -> { if (p != null) c.add(p); return c }, null)
+
+        then: 'the property is not added'
+        event.getProperties().isEmpty()
+    }
+    
+    def 'test calculate recurence set without end date'() {
+        given: 'a component without end date'
+        VEvent component = builder.with {
+            vevent {
+                dtstart '20221014', parameters: [Value.DATE]
+            }
+        }
+
+        and: 'an expected list of periods'
+        def expectedPeriods = new HashSet<Period<? extends Temporal>>()
+        expectedPeriods.addAll(expectedResults.collect { Period.parse(it)})
+
+        expect: 'calculate recurrence set returns the expected results'
+        component.calculateRecurrenceSet(period) == expectedPeriods
+
+        where:
+        period    | expectedResults
+        Period.parse('20221014/P1W') | ['20221014/P1D']
+    }
+}

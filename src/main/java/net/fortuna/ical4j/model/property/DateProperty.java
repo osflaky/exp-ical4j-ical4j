@@ -1,0 +1,375 @@
+/**
+ * Copyright (c) 2012, Ben Fortuna
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *  o Redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer.
+ *
+ *  o Redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution.
+ *
+ *  o Neither the name of Ben Fortuna nor the names of any other contributors
+ * may be used to endorse or promote products derived from this software
+ * without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package net.fortuna.ical4j.model.property;
+
+import net.fortuna.ical4j.model.*;
+import net.fortuna.ical4j.model.parameter.TzId;
+import net.fortuna.ical4j.model.parameter.Value;
+import net.fortuna.ical4j.util.CompatibilityHints;
+import net.fortuna.ical4j.util.Strings;
+import net.fortuna.ical4j.validate.ValidationEntry;
+import net.fortuna.ical4j.validate.ValidationException;
+import net.fortuna.ical4j.validate.ValidationResult;
+import net.fortuna.ical4j.validate.property.DatePropertyValidator;
+import org.jspecify.annotations.NonNull;
+import org.slf4j.LoggerFactory;
+
+import java.time.DateTimeException;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.Temporal;
+import java.util.Optional;
+
+import static net.fortuna.ical4j.model.Parameter.VALUE;
+
+/**
+ * $Id$
+ * <p/>
+ * Created on 9/07/2005
+ * <p/>
+ * Base class for properties with a DATE or DATE-TIME value. Note that some sub-classes may only allow either a DATE or
+ * a DATE-TIME value, for which additional rules/validation should be specified.
+ *
+ * Note that generics have been introduced as part of the migration to the new Java Date/Time API.
+ * Date properties should now indicate the applicable {@link Temporal} type for the property.
+ *
+ * For example:
+ *
+ * <ul>
+ *     <li>UTC-based properties should use {@link java.time.Instant} to represent UTC time</li>
+ *     <li>Date-only properties should use {@link java.time.LocalDate} to represent a date value</li>
+ *     <li>Date-time properties should use {@link java.time.ZonedDateTime} to represent a date-time value influenced by timezone rules</li>
+ * </ul>
+ *
+ * @author Ben Fortuna
+ */
+public abstract class DateProperty<T extends Temporal> extends Property {
+
+    private static final long serialVersionUID = 3160883132732961321L;
+
+    private final CalendarDateFormat parseFormat;
+
+    private final Value defaultValueParam;
+
+    private TemporalAdapter<T> date;
+
+    private transient TimeZoneRegistry timeZoneRegistry;
+
+    /**
+     *
+     */
+    private ZoneId defaultTimeZone;
+
+    /**
+     * @param name       the property name
+     * @param parameters a list of initial parameters
+     */
+    public DateProperty(final String name, final ParameterList parameters) {
+
+        this(name, parameters, CalendarDateFormat.DEFAULT_PARSE_FORMAT, Value.DATE_TIME);
+    }
+
+    public DateProperty(final String name, final ParameterList parameters, CalendarDateFormat parseFormat,
+                        Value defaultValueParam) {
+
+        super(name, parameters);
+        this.parseFormat = parseFormat;
+        this.defaultValueParam = defaultValueParam;
+    }
+
+    public DateProperty(final Enum<?> name, final ParameterList parameters, CalendarDateFormat parseFormat,
+                        Value defaultValueParam) {
+
+        super(name, parameters);
+        this.parseFormat = parseFormat;
+        this.defaultValueParam = defaultValueParam;
+    }
+
+    /**
+     * @param name the property name
+     */
+    public DateProperty(final String name) {
+        this(name, CalendarDateFormat.DEFAULT_PARSE_FORMAT, Value.DATE_TIME);
+    }
+
+    public DateProperty(final String name, CalendarDateFormat parseFormat, Value defaultValueParam) {
+        super(name);
+        this.parseFormat = parseFormat;
+        this.defaultValueParam = defaultValueParam;
+    }
+
+    /**
+     *
+     * @param name an enum representing a property name
+     * @param parseFormat
+     * @param defaultValueParam
+     */
+    public DateProperty(final Enum<?> name, CalendarDateFormat parseFormat, Value defaultValueParam) {
+        super(name);
+        this.parseFormat = parseFormat;
+        this.defaultValueParam = defaultValueParam;
+    }
+
+    /**
+     * This method will attempt to dynamically cast the internal {@link Temporal} value to the
+     * required return value.
+     *
+     * e.g. LocalDate localDate = dateProperty.getDate();
+     *
+     * @return Returns the date.
+     */
+    @SuppressWarnings("unchecked")
+    public T getDate() {
+        if (date != null) {
+            Optional<TzId> tzId = getParameter(Parameter.TZID);
+            if (tzId.isPresent() && shouldApplyTimezone()) {
+                //xxx: type T should always be ZonedDateTime where TZID parameter is specified..
+                try {
+                    return (T) date.toLocalTime(tzId.get().toZoneId(timeZoneRegistry));
+                } catch (DateTimeException e) {
+                    // TZID resolved to no known zone. Under relaxed validation the value has been parsed as a
+                    // floating date-time (see TemporalAdapter#getTemporal); return it and ignore the TZID.
+                    if (CompatibilityHints.isHintEnabled(CompatibilityHints.KEY_RELAXED_VALIDATION)) {
+                        return date.getTemporal();
+                    }
+                    throw e;
+                }
+            } else {
+                return date.getTemporal();
+            }
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * Sets the date value of this property. The timezone and value of this
+     * instance will also be updated accordingly.
+     *
+     * @param date The date to set.
+     */
+    public void setDate(T date) {
+        if (date != null) {
+            this.date = new TemporalAdapter<>(date, timeZoneRegistry);
+            refreshParameters();
+        } else {
+            this.date = null;
+        }
+    }
+
+    /**
+     * Default setValue() implementation. Allows for either DATE or DATE-TIME values.
+     *
+     * Note that this method will use the system default zone rules to parse the string value. For parsing string
+     * values in a different timezone use {@link TemporalAdapter#parse(String, ZoneId)} and
+     * {@link DateProperty#setDate(Temporal)}.
+     *
+     * @param value a string representation of a DATE or DATE-TIME value
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public void setValue(final String value) throws DateTimeParseException {
+        // value can be either a date-time or a date..
+        if (value != null && !value.isEmpty()) {
+            Optional<TzId> tzId = getParameter(Parameter.TZID);
+            TemporalAdapter<?> parsed;
+            try {
+                if (tzId.isPresent()) {
+                    parsed = TemporalAdapter.parse(value, tzId.get(), timeZoneRegistry);
+                } else if (defaultTimeZone != null && shouldApplyTimezone()) {
+                    parsed = TemporalAdapter.parse(value, defaultTimeZone);
+                } else {
+                    parsed = TemporalAdapter.parse(value, parseFormat);
+                }
+            } catch (DateTimeParseException dtpe) {
+                if (CompatibilityHints.isHintEnabled(CompatibilityHints.KEY_RELAXED_PARSING)) {
+                    LoggerFactory.getLogger(DateProperty.class).debug("Invalid DATE-TIME format", dtpe);
+
+                    // parse with relaxed format..
+                    parsed = tzId.isPresent()
+                            ? TemporalAdapter.parse(value, tzId.get(), timeZoneRegistry)
+                            : TemporalAdapter.parse(value, CalendarDateFormat.DEFAULT_PARSE_FORMAT);
+                } else {
+                    throw dtpe;
+                }
+            }
+            if (this instanceof UtcProperty) {
+                parsed = coerceToInstant(parsed);
+            }
+            this.date = (TemporalAdapter<T>) parsed;
+        } else {
+            this.date = null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static TemporalAdapter<Instant> coerceToInstant(TemporalAdapter<?> adapter) {
+        Temporal t = adapter.getTemporal();
+        if (t instanceof Instant) {
+            return (TemporalAdapter<Instant>) adapter;
+        } else if (t instanceof OffsetDateTime) {
+            return new TemporalAdapter<>(((OffsetDateTime) t).toInstant());
+        } else if (t instanceof ZonedDateTime) {
+            return new TemporalAdapter<>(((ZonedDateTime) t).toInstant());
+        } else if (t instanceof LocalDateTime) {
+            return new TemporalAdapter<>(((LocalDateTime) t).atOffset(ZoneOffset.UTC).toInstant());
+        } else if (t instanceof LocalDate) {
+            return new TemporalAdapter<>(((LocalDate) t).atStartOfDay(ZoneOffset.UTC).toInstant());
+        }
+        return new TemporalAdapter<>(Instant.from(t));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public String getValue() {
+        Optional<TzId> tzId = getParameter(Parameter.TZID);
+        if (tzId.isPresent() && shouldApplyTimezone()) {
+            try {
+                return date.toString(tzId.get().toZoneId(timeZoneRegistry));
+            } catch (DateTimeException e) {
+                // TZID resolved to no known zone. If relaxed validation is enabled the value has already been
+                // parsed as a floating date-time (see TemporalAdapter#getTemporal), so emit its floating form
+                // and ignore the TZID; otherwise propagate the failure.
+                if (CompatibilityHints.isHintEnabled(CompatibilityHints.KEY_RELAXED_VALIDATION)) {
+                    return Strings.valueOf(date);
+                }
+                throw e;
+            }
+        } else if (this instanceof UtcProperty) {
+            return date.toString(ZoneOffset.UTC);
+        } else {
+            return Strings.valueOf(date);
+        }
+    }
+
+    public void setTimeZoneRegistry(TimeZoneRegistry timeZoneRegistry) {
+        this.timeZoneRegistry = timeZoneRegistry;
+    }
+
+    /**
+     * Sometimes following a value update the {@link Value} and {@link TzId} parameters should be
+     * updated to reflect the new value. This method will examine the current value and modify these
+     * parameters accordingly.
+     */
+    public void refreshParameters() {
+        T temporal = date.getTemporal();
+        if (!TemporalAdapter.isDateTimePrecision(temporal)) {
+            if (Value.DATE.equals(defaultValueParam)) {
+                removeAll(VALUE);
+            } else {
+                replace(Value.DATE);
+            }
+            removeAll(Parameter.TZID);
+        } else if (temporal instanceof ZonedDateTime) {
+            if (Value.DATE_TIME.equals(defaultValueParam)) {
+                removeAll(VALUE);
+            } else {
+                replace(Value.DATE_TIME);
+            }
+
+            // update TZID param
+            if (TemporalAdapter.isUtc(temporal)) {
+                removeAll(TZID);
+            } else {
+                ZoneId zoneId = ((ZonedDateTime) temporal).getZone();
+                replace(new TzId(zoneId.getId()));
+            }
+        }
+    }
+
+    /**
+     * A default timezone may be specified for interpreting floating DATE-TIME values. In the absence of a default
+     * timezone the system default timezone will be used.
+     * @param defaultTimeZone a timezone identifier
+     */
+    public void setDefaultTimeZone(ZoneId defaultTimeZone) {
+        this.defaultTimeZone = defaultTimeZone;
+    }
+
+    private boolean shouldApplyTimezone() {
+        Optional<Value> value = getParameter(VALUE);
+        return !Optional.of(Value.DATE).equals(value) && !isUtc();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public int hashCode() {
+        return getDate() != null ? getDate().hashCode() : 0;
+    }
+
+    /**
+     * Indicates whether the current date value is specified in UTC time.
+     *
+     * @return true if the property is in UTC time, otherwise false
+     */
+    public final boolean isUtc() {
+        return date != null && TemporalAdapter.isUtc(date.getTemporal());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public ValidationResult validate() throws ValidationException {
+        ValidationResult result = new DatePropertyValidator<>().validate(this);
+        // A TZID that resolves to no known zone is a structural error and is reported here, even though
+        // value access (getValue/getDate) tolerates it as a floating value under relaxed validation.
+        Optional<TzId> tzId = getParameter(Parameter.TZID);
+        if (tzId.isPresent() && shouldApplyTimezone()) {
+            try {
+                tzId.get().toZoneId(timeZoneRegistry);
+            } catch (DateTimeException e) {
+                result.getEntries().add(new ValidationEntry("Unresolvable TZID [" + tzId.get().getValue() + "]",
+                        ValidationEntry.Severity.ERROR, getName()));
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public int compareTo(@NonNull Property o) {
+        if (o instanceof DateProperty) {
+            return TemporalComparator.INSTANCE.compare(getDate(), ((DateProperty<?>) o).getDate());
+        }
+        return super.compareTo(o);
+    }
+}

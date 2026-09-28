@@ -1,0 +1,93 @@
+package net.fortuna.ical4j.model;
+
+import org.jspecify.annotations.NonNull;
+
+import java.util.Collection;
+import java.util.function.BiFunction;
+import java.util.function.Predicate;
+
+public interface PropertyContainer extends PropertyListAccessor {
+    BiFunction<PropertyContainer, Property, PropertyContainer> ADD_IF_NOT_PRESENT = (c, p) -> {
+        if (c.getProperty(p.getName()).isEmpty()) {
+            c.add(p);
+        }
+        return c;
+    };
+
+    void setPropertyList(PropertyList properties);
+
+    /**
+     * Add a property to the container.
+     * @param property the property to add
+     * @return a reference to the container to support method chaining
+     */
+    default <T extends PropertyContainer> T add(@NonNull Property property) {
+        setPropertyList(getPropertyList().add(property));
+        return (T) this;
+    }
+
+    /**
+     * Add multiple properties to the container.
+     * @param properties a collection of properties to add
+     * @return a reference to the container to support method chaining
+     */
+    default <T extends PropertyContainer> T addAll(@NonNull Collection<Property> properties) {
+        setPropertyList(getPropertyList().addAll(properties));
+        return (T) this;
+    }
+
+    /**
+     * Remove a property from the container.
+     * @param property the property to remove
+     * @return a reference to the container to support method chaining
+     */
+    default <T extends PropertyContainer> T remove(Property property) {
+        setPropertyList(getPropertyList().remove(property));
+        return (T) this;
+    }
+
+    /**
+     * Remove all properties with the matching name.
+     * @param name name of the properties to remove
+     * @return a reference to the container to support method chaining
+     */
+    default <T extends PropertyContainer> T removeAll(String... name) {
+        setPropertyList(getPropertyList().removeAll(name));
+        return (T) this;
+    }
+
+    /**
+     * Remove all properties matching the specified filter.
+     * @param filter a filter predicate for matching
+     * @return a reference to the container to support method chaining
+     */
+    default <T extends PropertyContainer> T removeIf(Predicate<Property> filter) {
+        setPropertyList(getPropertyList().removeIf(filter));
+        return (T) this;
+    }
+
+    /**
+     * Add a property to the container whilst removing all other properties with the same property name.
+     * @param property the property to add
+     * @return a reference to the container to support method chaining
+     */
+    default <T extends PropertyContainer> T replace(Property property) {
+        setPropertyList(getPropertyList().replace(property));
+        return (T) this;
+    }
+
+    /**
+     * A functional method used to apply a property to a container in an undefined way.
+     *
+     * For example, a null check can be introduced as follows:
+     *
+     *  container.with((c, p) -> if (p != null) c.add(p); return c;)
+     * @param f
+     * @param p
+     * @return
+     * @param <T>
+     */
+    default <T extends PropertyContainer, P> T with(BiFunction<T, P, T> f, P p) {
+        return f.apply((T) this, p);
+    }
+}

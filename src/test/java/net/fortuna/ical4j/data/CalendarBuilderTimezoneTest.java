@@ -1,0 +1,217 @@
+/**
+ * Copyright (c) 2012, Ben Fortuna
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *  o Redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer.
+ *
+ *  o Redistributions in binary form must reproduce the above copyright
+ * notice, this list of conditions and the following disclaimer in the
+ * documentation and/or other materials provided with the distribution.
+ *
+ *  o Neither the name of Ben Fortuna nor the names of any other contributors
+ * may be used to endorse or promote products derived from this software
+ * without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package net.fortuna.ical4j.data;
+
+import net.fortuna.ical4j.model.*;
+import net.fortuna.ical4j.model.component.CalendarComponent;
+import net.fortuna.ical4j.model.component.VEvent;
+import net.fortuna.ical4j.model.parameter.TzId;
+import net.fortuna.ical4j.model.property.DtEnd;
+import net.fortuna.ical4j.model.property.DtStart;
+import net.fortuna.ical4j.util.CompatibilityHints;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.StringReader;
+import java.time.ZonedDateTime;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * $Id: CalendarBuilderTimezoneTest.java [Jul 1, 2008]
+ *
+ * Test case for CalendarBuilder and handling of icalendar streams
+ * where VTIMZONES are included after other components.
+ *
+ * @author randy
+ */
+public class CalendarBuilderTimezoneTest {
+
+    /* (non-Javadoc)
+     * @see junit.framework.TestCase#setUp()
+     */
+    @BeforeEach
+    public final void setUp() throws Exception {
+        CompatibilityHints.setHintEnabled(
+                CompatibilityHints.KEY_RELAXED_UNFOLDING, true);
+        CompatibilityHints.setHintEnabled(
+                CompatibilityHints.KEY_NOTES_COMPATIBILITY, true);
+        CompatibilityHints.setHintEnabled(
+                CompatibilityHints.KEY_RELAXED_VALIDATION, true);
+    }
+    
+    /* (non-Javadoc)
+     * @see junit.framework.TestCase#tearDown()
+     */
+    @AfterEach
+    public final void tearDown() throws Exception {
+        CompatibilityHints.clearHintEnabled(CompatibilityHints.KEY_RELAXED_UNFOLDING);
+        CompatibilityHints.clearHintEnabled(CompatibilityHints.KEY_NOTES_COMPATIBILITY);
+        CompatibilityHints.clearHintEnabled(CompatibilityHints.KEY_RELAXED_VALIDATION);
+
+        System.clearProperty("net.fortuna.ical4j.timezone.utcDefault");
+    }
+    
+
+   /**
+     * Test that VTIMEZONES that are included after VEVENT 
+     * are correctly handled and that dates defined before the
+     * VTIMEZONE are parsed properly.
+     */
+   @Test
+   public void testVTimeZoneAfterVEvent() throws Exception {
+
+        // Evolution includes VTIMEZONE defs after VEVENT defs,
+        // which is allowed by RFC-2445
+        InputStream in = getClass().getResourceAsStream(
+                "/samples/valid/evolution.ics");
+        CalendarBuilder builder = new CalendarBuilder();
+        Calendar calendar = null;
+
+        calendar = builder.build(in);
+        assertNotNull(calendar, "Calendar is null");
+        List<CalendarComponent> comps = calendar.getComponents(Component.VEVENT);
+        assertEquals(1, comps.size(), "VEVENT not found");
+        VEvent vevent = (VEvent) comps.get(0);
+
+        DtStart<?> dtstart = vevent.getRequiredProperty(Property.DTSTART);
+        ZonedDateTime dateTime = (ZonedDateTime) dtstart.getDate();
+
+        assertEquals("20080624T130000", dtstart.getValue(), "date value not correct");
+        assertNotNull(dateTime.getZone(), "timezone not present");
+        assertEquals("/softwarestudio.org/Tzfile/America/Chicago", builder.getRegistry().getTzId(dateTime.getZone().getId()), "timezone not correct");
+
+    }
+
+    @Test
+    public void testTwoDaylights() throws IOException, ParserException, ConstraintViolationException {
+
+        System.setProperty("net.fortuna.ical4j.timezone.utcDefault", "true");
+
+        String ical = "BEGIN:VCALENDAR\n" +
+                "VERSION:2.0\n" +
+                "PRODID:-//Test - ECPv4.9.9//NONSGML v1.0//EN\n" +
+                "CALSCALE:GREGORIAN\n" +
+                "METHOD:PUBLISH\n" +
+                "BEGIN:VTIMEZONE\n" +
+                "TZID:Europe/Amsterdam\n" +
+                "BEGIN:DAYLIGHT\n" +
+                "TZOFFSETFROM:+0100\n" +
+                "TZOFFSETTO:+0200\n" +
+                "TZNAME:CEST\n" +
+                "DTSTART:20190331T010000\n" +
+                "END:DAYLIGHT\n" +
+                "BEGIN:STANDARD\n" +
+                "TZOFFSETFROM:+0200\n" +
+                "TZOFFSETTO:+0100\n" +
+                "TZNAME:CET\n" +
+                "DTSTART:20191027T010000\n" +
+                "END:STANDARD\n" +
+                "BEGIN:DAYLIGHT\n" +
+                "TZOFFSETFROM:+0100\n" +
+                "TZOFFSETTO:+0200\n" +
+                "TZNAME:CEST\n" +
+                "DTSTART:20200329T010000\n" +
+                "END:DAYLIGHT\n" +
+                "BEGIN:STANDARD\n" +
+                "TZOFFSETFROM:+0200\n" +
+                "TZOFFSETTO:+0100\n" +
+                "TZNAME:CET\n" +
+                "DTSTART:20201025T010000\n" +
+                "END:STANDARD\n" +
+                "END:VTIMEZONE\n" +
+                "BEGIN:VEVENT\n" +
+                "DTSTART;TZID=Europe/Amsterdam:20200503T173000\n" +
+                "DTEND;TZID=Europe/Amsterdam:20200503T200000\n" +
+                "DTSTAMP:20191006T163046Z\n" +
+                "CREATED:20190924T180719Z\n" +
+                "LAST-MODIFIED:20191006T154131Z\n" +
+                "SUMMARY:Test summary\n" +
+                "DESCRIPTION:Test description \\n\n" +
+                "END:VEVENT\n" +
+                "BEGIN:VEVENT\n" +
+                "DTSTART;TZID=Europe/Amsterdam:20191006T190000\n" +
+                "DTEND;TZID=Europe/Amsterdam:20191006T203000\n" +
+                "DTSTAMP:20191006T163047Z\n" +
+                "CREATED:20190912T190803Z\n" +
+                "LAST-MODIFIED:20190918T193650Z\n" +
+                "SUMMARY:Second test summary\n" +
+                "DESCRIPTION:Second test description \\n\n" +
+                "END:VEVENT\n" +
+                "END:VCALENDAR";
+
+        StringReader in = new StringReader(ical);
+        CalendarBuilder builder = new CalendarBuilder();
+        Calendar calendar = null;
+
+        calendar = builder.build(in);
+        assertNotNull(calendar, "Calendar is null");
+        List<CalendarComponent> comps = calendar.getComponents(Component.VEVENT);
+        assertEquals(2, comps.size(), "2 VEVENTs not found");
+        VEvent vevent0 = (VEvent) comps.get(0);
+
+        DtStart<ZonedDateTime> dtstart0 = vevent0.getRequiredProperty(Property.DTSTART);
+        Optional<TzId> dtstart0TzId = dtstart0.getParameter(Parameter.TZID);
+
+        assertEquals("20200503T173000", dtstart0.getValue(), "date value not correct");
+        assertTrue(dtstart0TzId.isPresent(), "timezone not present");
+        assertEquals("Europe/Amsterdam", dtstart0TzId.get().getValue(), "timezone not correct");
+
+        DtEnd<ZonedDateTime> dtend0 = vevent0.getRequiredProperty(Property.DTEND);
+        Optional<TzId> dtend0TzId = dtend0.getParameter(Parameter.TZID);
+
+        assertEquals("20200503T200000", dtend0.getValue(), "date value not correct");
+        assertTrue(dtend0TzId.isPresent(), "timezone not present");
+        assertEquals("Europe/Amsterdam", dtend0TzId.get().getValue(), "timezone not correct");
+
+        VEvent vevent1 = (VEvent) comps.get(1);
+        DtStart<ZonedDateTime> dtstart1 = vevent1.getRequiredProperty(Property.DTSTART);
+        Optional<TzId> dtstart1TzId = dtstart1.getParameter(Parameter.TZID);
+
+        assertEquals("20191006T190000", dtstart1.getValue(), "date value not correct");
+        assertTrue(dtstart1TzId.isPresent(), "timezone not present");
+        assertEquals("Europe/Amsterdam", dtstart1TzId.get().getValue(), "timezone not correct");
+
+        DtEnd<ZonedDateTime> dtend1 = vevent1.getRequiredProperty(Property.DTEND);
+        Optional<TzId> dtend1TzId = dtend1.getParameter(Parameter.TZID);
+
+        assertEquals("20191006T203000", dtend1.getValue(), "date value not correct");
+        assertTrue(dtend1TzId.isPresent(), "timezone not present");
+        assertEquals("Europe/Amsterdam", dtend1TzId.get().getValue(), "timezone not correct");
+
+    }
+}

@@ -1,0 +1,68 @@
+package net.fortuna.ical4j.model;
+
+import java.io.Serializable;
+import java.util.Objects;
+
+/**
+ * Represents a month of the year, with an option to indicate if it is a leap month.
+ */
+public class Month implements Serializable {
+
+    private final int monthOfYear;
+
+    private final boolean leapMonth;
+
+    public Month(int monthOfYear) {
+        this(monthOfYear, false);
+    }
+
+    public Month(int monthOfYear, boolean leapMonth) {
+        this.monthOfYear = monthOfYear;
+        this.leapMonth = leapMonth;
+    }
+
+    public int getMonthOfYear() {
+        return monthOfYear;
+    }
+
+    public boolean isLeapMonth() {
+        return leapMonth;
+    }
+
+    public static Month parse(String monthString) {
+        if (monthString.endsWith("L")) {
+            return new Month(Integer.parseInt(monthString.substring(0, monthString.length()-1)), true);
+        }
+        return new Month(Integer.parseInt(monthString));
+    }
+
+    public static Month valueOf(int monthOfYear) {
+        return new Month(monthOfYear);
+    }
+
+    public static Month from(java.time.Month month) {
+        return new Month(month.getValue());
+    }
+
+    @Override
+    public String toString() {
+        if (leapMonth) {
+            return monthOfYear + "L";
+        } else {
+            return String.valueOf(monthOfYear);
+        }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        var month = (Month) o;
+        return monthOfYear == month.monthOfYear && leapMonth == month.leapMonth;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(monthOfYear, leapMonth);
+    }
+}

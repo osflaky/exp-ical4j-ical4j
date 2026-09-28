@@ -1,0 +1,106 @@
+/*
+ *  Copyright (c) 2023, Ben Fortuna
+ *  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions
+ *  are met:
+ *
+ *   o Redistributions of source code must retain the above copyright
+ *  notice, this list of conditions and the following disclaimer.
+ *
+ *   o Redistributions in binary form must reproduce the above copyright
+ *  notice, this list of conditions and the following disclaimer in the
+ *  documentation and/or other materials provided with the distribution.
+ *
+ *   o Neither the name of Ben Fortuna nor the names of any other contributors
+ *  may be used to endorse or promote products derived from this software
+ *  without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ *  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ *  CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ *  EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ *  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ *  PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ *  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ *  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ */
+
+package net.fortuna.ical4j.model;
+
+import net.fortuna.ical4j.model.property.*;
+
+import java.time.temporal.Temporal;
+import java.util.List;
+
+/**
+ * An interface for accessing properties related to relationships in iCalendar objects.
+ * This includes properties such as attendees, contact, organizer, recurrence ID, related to, and URL.
+ *
+ * @see <a href="https://icalendar.org/iCalendar-RFC-5545/3-8-Relationship-Properties.html">RFC 5545 - 3.8 Relationship Properties</a>
+ */
+public interface RelationshipPropertyAccessor extends PropertyContainer {
+
+    /**
+     *
+     * @return
+     */
+    default List<Attendee> getAttendees() {
+        return getProperties(Property.ATTENDEE);
+    }
+
+    /**
+     *
+     * @return
+     * @throws ConstraintViolationException if the property is not present
+     */
+    default Contact getContact() {
+        return (Contact) getProperty(Property.CONTACT).orElse(null);
+    }
+
+    /**
+     *
+     * @return
+     * @throws ConstraintViolationException if the property is not present
+     */
+    default Organizer getOrganizer() {
+        return (Organizer) getProperty(Property.ORGANIZER).orElse(null);
+    }
+
+    /**
+     *
+     * @return
+     * @param <T>
+     * @throws ConstraintViolationException if the property is not present
+     */
+    default <T extends Temporal> RecurrenceId<T> getRecurrenceId() {
+        return (RecurrenceId<T>) getProperty(Property.RECURRENCE_ID).orElse(null);
+    }
+
+    /**
+     *
+     * @return
+     * @throws ConstraintViolationException if the property is not present
+     */
+    default RelatedTo getRelatedTo() {
+        return (RelatedTo) getProperty(Property.RELATED_TO).orElse(null);
+    }
+
+    /**
+     *
+     * @return
+     * @throws ConstraintViolationException if the property is not present
+     */
+    default Url getUrl() {
+        return (Url) getProperty(Property.URL).orElse(null);
+    }
+
+    default List<Link> getLinks() {
+        return getProperties(Link.PROPERTY_NAME);
+    }
+}
